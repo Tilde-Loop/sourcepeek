@@ -1,4 +1,4 @@
-# Sourcepeek 🔥
+# Sourcepeek 
 
 Click any element in dev mode to see its source file, line, component chain, props, state and git history. Alt+click opens it in your editor. Describe a change in plain words and Sourcepeek previews it or writes it into your code, with a diff and undo.
 
