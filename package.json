@@ -1,6 +1,6 @@
 {
   "name": "sourcepeek",
-  "version": "5.12.1",
+  "version": "5.13.0",
   "description": "Click any UI element in dev mode to see its source file, line, component chain, props, state and where a value comes from. Web Vitals pointed at file:line, an MCP server for coding agents, Alt+click to your editor, and AI changes written into your code. React, Next.js, Vue, Svelte and Angular.",
   "type": "module",
   "bin": {
@@ -42,9 +42,17 @@
       "types": "./types/angular-proxy.d.ts",
       "default": "./src/angular-proxy.js"
     },
+    "./angular/auto": {
+      "types": "./types/auto.d.ts",
+      "default": "./src/angular-auto.js"
+    },
     "./vanilla": {
       "types": "./types/vanilla.d.ts",
       "default": "./src/vanilla.js"
+    },
+    "./auto": {
+      "types": "./types/auto.d.ts",
+      "default": "./src/auto.js"
     },
     "./vite": {
       "types": "./types/vite.d.ts",
@@ -63,6 +71,10 @@
       "types": "./types/next-api.d.ts",
       "default": "./src/next-api.js"
     },
+    "./next/auto": {
+      "types": "./types/auto.d.ts",
+      "default": "./src/next-auto.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -73,7 +85,10 @@
     "LICENSE"
   ],
   "sideEffects": [
-    "./src/react-hook.js"
+    "./src/react-hook.js",
+    "./src/auto.js",
+    "./src/next-auto.js",
+    "./src/angular-auto.js"
   ],
   "keywords": [
     "dev-tools",

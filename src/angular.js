@@ -5,7 +5,7 @@ import { mount, unmount } from './client/core.js';
  * Change detection cycles for the "Renders & state" view. Nothing is recorded here: listeners are only added
  * while that view is open for a component, so an app without it open pays one empty function call per cycle.
  */
-function bridgeChangeDetection() {
+export function bridgeChangeDetection() {
   if (typeof window === 'undefined') return;
   const bridge = (window.__SOURCEPEEK_NG__ = window.__SOURCEPEEK_NG__ || { listeners: new Set(), cycles: 0, via: null });
   if (bridge.via) return;

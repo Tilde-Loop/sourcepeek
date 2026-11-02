@@ -105,7 +105,62 @@ function addSourceTracing(config, root) {
   holder.outputFileTracingIncludes = { ...current, [key]: [...(current[key] || []), ...globs] };
 }
 
-function withSourcepeek(userConfig = {}) {
+// autoMount: Next.js 15.3+ runs instrumentation-client in the browser before the app starts, with webpack and Turbopack
+// alike; `npx sourcepeek setup` creates one that imports sourcepeek/next/auto. Without that file, the import is added
+// to webpack's client entries instead (Turbopack has no hook for that).
+const AUTO_ENTRY = path.join(__dirname, 'next-auto.js');
+const INSTRUMENTATION_FILES = ['js', 'ts', 'mjs', 'jsx', 'tsx'].flatMap((ext) => [`instrumentation-client.${ext}`, `src/instrumentation-client.${ext}`]);
+
+function instrumentationImportsSourcepeek(root) {
+  return INSTRUMENTATION_FILES.some((f) => {
+    try {
+      return /['"]sourcepeek\/next\/auto['"]/.test(fs.readFileSync(path.join(root, f), 'utf8'));
+    } catch {
+      return false;
+    }
+  });
+}
+
+function addWebpackEntry(config) {
+  const userWebpack = config.webpack;
+  config.webpack = (wc, ctx) => {
+    if (!ctx.isServer) {
+      const entry = wc.entry;
+      wc.entry = async () => {
+        const entries = typeof entry === 'function' ? await entry() : { ...entry };
+        // main-app: App Router, main: Pages Router. Added last, so Next.js's own client code runs first.
+        for (const name of ['main-app', 'main']) {
+          const e = entries[name];
+          if (Array.isArray(e)) {
+            if (!e.includes(AUTO_ENTRY)) e.push(AUTO_ENTRY);
+          } else if (typeof e === 'string') entries[name] = [e, AUTO_ENTRY];
+          else if (e && Array.isArray(e.import) && !e.import.includes(AUTO_ENTRY)) e.import.push(AUTO_ENTRY);
+        }
+        return entries;
+      };
+    }
+    return typeof userWebpack === 'function' ? userWebpack(wc, ctx) : wc;
+  };
+}
+
+function addAutoMount(config, root) {
+  config.env = { ...(config.env || {}), SOURCEPEEK_AUTO_MOUNT: '1' };
+  if (instrumentationImportsSourcepeek(root)) return;
+  addWebpackEntry(config);
+  if (process.env.TURBOPACK) {
+    const { maj, min } = nextMajorMinor(root);
+    const fix = maj > 15 || (maj === 15 && min >= 3) ? 'Run `npx sourcepeek setup` to create instrumentation-client.js,' : 'Turbopack before Next.js 15.3 has no hook for it:';
+    console.warn(`[sourcepeek] autoMount: ${fix} or render <Sourcepeek /> (sourcepeek/react) in your layout.`);
+  }
+}
+
+/**
+ * @param {object|Function} userConfig your Next.js config.
+ * @param {{ autoMount?: boolean }} [options] autoMount (default true): mount the inspector without rendering
+ *   <Sourcepeek /> in your layout. Set it to false to render the component yourself.
+ */
+function withSourcepeek(userConfig = {}, options = {}) {
+  const autoMount = options.autoMount !== false;
   return async function sourcepeekNextConfig(phase, ctx) {
     const config = typeof userConfig === 'function' ? await userConfig(phase, ctx) : { ...userConfig };
     if (process.env.SOURCEPEEK_DISABLE) return config;
@@ -138,6 +193,7 @@ function withSourcepeek(userConfig = {}) {
     if (phase !== SERVER_PHASE) {
       addWebpackLoader(config, root, prod);
       addTurbopackRules(config, root);
+      if (autoMount) addAutoMount(config, root);
     }
     return config;
   };

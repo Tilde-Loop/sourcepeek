@@ -1393,8 +1393,23 @@ function showDetail(ctx) {
 const CAPTURE = { capture: true };
 const SWALLOWED = ['mousedown', 'mouseup', 'pointerdown', 'pointerup'];
 
+// One Sourcepeek per page. autoMount and a leftover <Sourcepeek /> can load this module twice (a bundler may
+// split it across entries); the first copy to mount owns the page and the other forwards to it.
+const self = { mount, unmount };
+const OWNER = '__SOURCEPEEK_CORE__';
+
 export function mount() {
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  const owner = window[OWNER] || (window[OWNER] = self);
+  if (owner !== self) {
+    if (!state) {
+      uninstallCapture();
+      uninstallReportCapture();
+      uninstallStorageCapture();
+      uninstallVitals();
+    }
+    return owner.mount();
+  }
   refCount++;
   // A Fast Refresh / HMR remount (unmount immediately followed by mount) keeps the UI and its state.
   if (teardownTimer) {
@@ -1576,9 +1591,11 @@ function teardown() {
   uninstallVitals();
   stopSharing();
   state = null;
+  if (window[OWNER] === self) window[OWNER] = null;
 }
 
 export function unmount() {
+  if (typeof window !== 'undefined' && window[OWNER] && window[OWNER] !== self) return window[OWNER].unmount();
   if (!state) return;
   refCount = Math.max(0, refCount - 1);
   if (refCount > 0) return;

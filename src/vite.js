@@ -9,8 +9,19 @@ const { transform, createVueNodeTransform } = transformMod;
 const { createHandler } = handlerMod;
 const { enabled } = envMod;
 
-export default function sourcepeek() {
+// SvelteKit has no index.html for transformIndexHtml, so the auto-mount import goes into its client entry instead:
+// the generated app.js (dev and build) and the runtime entry (older versions without a generated app.js).
+const KIT_CLIENT = /[\\/](?:\.svelte-kit[\\/]generated[\\/]client(?:-optimized)?[\\/]app\.js|@sveltejs[\\/]kit[\\/]src[\\/]runtime[\\/]client[\\/]entry\.js)$/;
+const AUTO = 'sourcepeek/auto';
+
+/**
+ * @param {{ autoMount?: boolean }} [options] autoMount (default true): mount the inspector without rendering
+ *   <Sourcepeek /> in your app. Set it to false to render the component yourself.
+ */
+export default function sourcepeek(options = {}) {
+  const autoMount = options.autoMount !== false;
   let root = process.cwd();
+  let kit = false;
   let vueHooked = false;
   let compilerSfc = null;
   let usesReact = false;
@@ -26,8 +37,14 @@ export default function sourcepeek() {
       return enabled(r, { dev, mode: env.mode || (dev ? 'development' : 'production') });
     },
 
+    config() {
+      // Found by the dependency scan from the start, so adding it to index.html doesn't trigger a re-optimize + reload.
+      if (autoMount) return { optimizeDeps: { include: [AUTO] } };
+    },
+
     configResolved(config) {
       root = config.root;
+      kit = config.plugins.some((p) => p && typeof p.name === 'string' && p.name.startsWith('vite-plugin-sveltekit'));
       try {
         const req = createRequire(root + '/package.json');
         const pkg = req('./package.json');
@@ -59,12 +76,20 @@ export default function sourcepeek() {
     },
 
     // "Renders & state" counts React commits through the DevTools hook, which must exist before react-dom loads.
-    transformIndexHtml() {
-      if (!usesReact) return [];
-      return [{ tag: 'script', children: HOOK_SOURCE, injectTo: 'head-prepend' }];
+    // autoMount: an inline module script that imports sourcepeek/auto. `order: 'pre'` so Vite still resolves and
+    // bundles that import like one written in index.html.
+    transformIndexHtml: {
+      order: 'pre',
+      handler() {
+        const tags = [];
+        if (usesReact) tags.push({ tag: 'script', children: HOOK_SOURCE, injectTo: 'head-prepend' });
+        if (autoMount) tags.push({ tag: 'script', attrs: { type: 'module' }, children: `import '${AUTO}';`, injectTo: 'head' });
+        return tags;
+      },
     },
 
-    transform(code, id) {
+    transform(code, id, opts) {
+      if (autoMount && kit && !(opts && opts.ssr) && KIT_CLIENT.test(id.split('?')[0])) return { code: `import '${AUTO}';\n${code}`, map: null };
       if (id.includes('?')) return null;
       if (id.endsWith('.vue') && vueHooked) return null;
       return transform(code, id, root, { compilerSfc });

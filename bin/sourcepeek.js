@@ -150,6 +150,123 @@ function setupNext(info) {
   return true;
 }
 
+// ---------- autoMount ----------
+// The plugin mounts Sourcepeek itself, so nothing goes into the app's layout. Next.js 15.3+ needs one import in
+// instrumentation-client (loaded by Next.js in the browser, webpack and Turbopack alike); older versions get it
+// through webpack's client entry. Angular gets it through the polyfills of the development build.
+
+const NEXT_AUTO = 'sourcepeek/next/auto';
+const NEXT_AUTO_LINE = `import '${NEXT_AUTO}';`;
+const INSTRUMENTATION = ['js', 'ts', 'mjs', 'jsx', 'tsx'].flatMap((ext) => [`instrumentation-client.${ext}`, `src/instrumentation-client.${ext}`]);
+
+function nextVersion() {
+  try {
+    const v = createRequire(path.join(cwd, 'package.json'))('next/package.json').version;
+    const [maj, min] = v.split('.').map(Number);
+    return { maj, min };
+  } catch {
+    return null;
+  }
+}
+
+function setupNextAutoMount() {
+  const v = nextVersion();
+  if (v && !(v.maj > 15 || (v.maj === 15 && v.min >= 3))) {
+    ok('Sourcepeek mounts itself through the webpack client entry (Next.js before 15.3 has no instrumentation-client).');
+    if (/--turbo/.test(JSON.stringify(readPkg().scripts || {})))
+      warn('Turbopack before Next.js 15.3 has no hook for that: render <Sourcepeek /> (sourcepeek/react) in your layout, or upgrade Next.js.');
+    return;
+  }
+  const existing = findFile(INSTRUMENTATION);
+  if (existing) {
+    const code = fs.readFileSync(existing, 'utf8');
+    if (code.includes(NEXT_AUTO)) return ok(`${rel(existing)} already imports ${NEXT_AUTO}`);
+    backup(existing);
+    fs.writeFileSync(existing, `${NEXT_AUTO_LINE}\n${code}`);
+    return ok(`Patched ${rel(existing)} → imports ${NEXT_AUTO}`);
+  }
+  const inSrc = !fs.existsSync(path.join(cwd, 'app')) && !fs.existsSync(path.join(cwd, 'pages')) && (fs.existsSync(path.join(cwd, 'src/app')) || fs.existsSync(path.join(cwd, 'src/pages')));
+  const file = path.join(cwd, inSrc ? 'src' : '', `instrumentation-client.${fs.existsSync(path.join(cwd, 'tsconfig.json')) ? 'ts' : 'js'}`);
+  fs.writeFileSync(
+    file,
+    `// Created by \`npx sourcepeek setup\`: mounts Sourcepeek in the browser, so your layout needs no <Sourcepeek />.\n` +
+      `// It only does something where withSourcepeek() is active (next dev, or production with SOURCEPEEK_ENABLE_PROD).\n` +
+      `${NEXT_AUTO_LINE}\n`
+  );
+  ok(`Created ${rel(file)} (Next.js loads it in the browser; it mounts Sourcepeek)`);
+}
+
+function removeNextAutoMount() {
+  for (const f of INSTRUMENTATION) {
+    const p = path.join(cwd, f);
+    if (!fs.existsSync(p)) continue;
+    const code = fs.readFileSync(p, 'utf8');
+    if (!code.includes(NEXT_AUTO)) continue;
+    const rest = code.replace(/^.*['"]sourcepeek\/next\/auto['"].*\n?/m, '');
+    if (/^\s*$/.test(rest.replace(/^\s*\/\/.*$/gm, ''))) {
+      fs.unlinkSync(p);
+      ok(`Removed ${rel(p)}`);
+    } else {
+      fs.writeFileSync(p, rest);
+      ok(`Removed the sourcepeek import from ${rel(p)}`);
+    }
+  }
+}
+
+// Angular: `ng serve` builds the "development" configuration of the build target (whatever the serve target's
+// buildTarget / browserTarget names). Its polyfills get sourcepeek/angular/auto, so production builds stay untouched.
+const NG_AUTO = 'sourcepeek/angular/auto';
+
+function devBuildConfigs(proj, serve) {
+  const names = new Set();
+  for (const opts of [serve.options || {}, ...Object.values(serve.configurations || {})]) {
+    const t = opts.buildTarget || opts.browserTarget;
+    const cfg = t && t.split(':')[2];
+    if (cfg && cfg !== 'production') names.add(cfg);
+  }
+  if (!names.size) names.add('development');
+  const build = (proj.architect || proj.targets || {}).build;
+  return build ? [...names].map((n) => ({ name: n, build })) : [];
+}
+
+function setupAngularAutoMount(ws) {
+  let changed = false;
+  for (const [name, proj] of Object.entries(ws.projects || {})) {
+    const serve = (proj.architect || proj.targets || {}).serve;
+    if (!serve || !/dev-server/.test(String(serve.builder || ''))) continue;
+    for (const { name: cfg, build } of devBuildConfigs(proj, serve)) {
+      build.configurations = build.configurations || {};
+      const c = (build.configurations[cfg] = build.configurations[cfg] || {});
+      const base = c.polyfills !== undefined ? c.polyfills : (build.options || {}).polyfills;
+      const list = base === undefined ? [] : Array.isArray(base) ? [...base] : [base];
+      if (list.includes(NG_AUTO)) continue;
+      // Configurations replace options, so the development list repeats the base polyfills (zone.js first).
+      c.polyfills = [...list, NG_AUTO];
+      changed = true;
+      ok(`${name}: the ${cfg} build loads ${NG_AUTO} (polyfills)`);
+    }
+  }
+  return changed;
+}
+
+function removeAngularAutoMount(ws) {
+  let changed = false;
+  for (const proj of Object.values(ws.projects || {})) {
+    const build = (proj.architect || proj.targets || {}).build;
+    if (!build) continue;
+    const base = (build.options || {}).polyfills;
+    for (const c of [build.options || {}, ...Object.values(build.configurations || {})]) {
+      if (!Array.isArray(c.polyfills) || !c.polyfills.includes(NG_AUTO)) continue;
+      c.polyfills = c.polyfills.filter((p) => p !== NG_AUTO);
+      // Setup copied the base list into the configuration; drop that copy again when it matches.
+      const same = JSON.stringify(c.polyfills) === JSON.stringify(base === undefined ? [] : [].concat(base));
+      if (c !== build.options && same) delete c.polyfills;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function setupVite(info) {
   let file = info.file;
   if (!file) {
@@ -279,11 +396,12 @@ function setupAngular(info) {
     fs.writeFileSync(abs, proxyFileCode(existing));
     ok(`Created ${wrapper}${existing ? ` (it keeps your proxy rules from ${existing})` : ''}`);
   }
-  if (changed) {
+  const auto = setupAngularAutoMount(ws);
+  if (changed || auto) {
     backup(file);
     const indent = (fs.readFileSync(file, 'utf8').match(/\n([ \t]+)"/) || [, '  '])[1];
     fs.writeFileSync(file, JSON.stringify(ws, null, indent) + '\n');
-    ok(`Patched ${rel(file)} → proxyConfig`);
+    ok(`Patched ${rel(file)} → ${[changed && 'proxyConfig', auto && 'polyfills'].filter(Boolean).join(', ')}`);
   } else ok(`${rel(file)} already uses the sourcepeek proxy`);
   return true;
 }
@@ -297,7 +415,7 @@ function removeAngular() {
   } catch {
     return;
   }
-  let changed = false;
+  let changed = removeAngularAutoMount(ws);
   const wrappers = new Set();
   for (const { serve } of serveTargets(ws)) {
     for (const opts of [serve.options || {}, ...Object.values(serve.configurations || {})]) {
@@ -378,33 +496,34 @@ function removeFrom(file) {
   ok(`Removed sourcepeek from ${rel(file)}`);
 }
 
-function printUsage(info) {
-  const box = (lines) => console.log(lines.map((l) => '   ' + c.m(l)).join('\n'));
-  console.log(`\n${c.b(info.kind === 'angular' ? 'Last step — add the provider to your app:' : 'Last step — render <Sourcepeek /> once, anywhere in your app:')}\n`);
-  if (info.kind === 'next') {
-    if (info.appDir) {
-      console.log(c.d('  app/layout.tsx (works directly in the Server Component layout):'));
-      box([`import Sourcepeek from 'sourcepeek/react';`, ``, `<body>`, `  {children}`, `  <Sourcepeek />`, `</body>`]);
-    } else {
-      console.log(c.d('  pages/_app.tsx:'));
-      box([`import Sourcepeek from 'sourcepeek/react';`, ``, `<>`, `  <Component {...pageProps} />`, `  <Sourcepeek />`, `</>`]);
+// A <Sourcepeek /> or provideSourcepeek() from before autoMount still works (both share one panel), but is no longer needed.
+const LEFTOVER_FILES = [
+  'app/layout.tsx', 'app/layout.jsx', 'app/layout.js', 'src/app/layout.tsx', 'src/app/layout.jsx', 'src/app/layout.js',
+  'pages/_app.tsx', 'pages/_app.jsx', 'pages/_app.js', 'src/pages/_app.tsx', 'src/pages/_app.jsx', 'src/pages/_app.js',
+  'src/App.tsx', 'src/App.jsx', 'src/App.vue', 'src/App.svelte', 'src/routes/+layout.svelte',
+  'src/main.tsx', 'src/main.jsx', 'src/main.ts', 'src/main.js', 'src/app/app.config.ts', 'src/app/app.module.ts',
+];
+
+function leftoverMounts() {
+  return LEFTOVER_FILES.filter((f) => {
+    try {
+      return /from\s+['"]sourcepeek\/(react|vue|svelte|angular)['"]/.test(fs.readFileSync(path.join(cwd, f), 'utf8'));
+    } catch {
+      return false;
     }
-  } else if (info.kind === 'angular') {
-    console.log(c.d('  src/app/app.config.ts (or the providers of your AppModule):'));
-    box([`import { provideSourcepeek } from 'sourcepeek/angular';`, ``, `export const appConfig: ApplicationConfig = {`, `  providers: [`, `    provideSourcepeek(),`, `    // …`, `  ],`, `};`]);
-    console.log(c.d('  It only does something on ng serve — production builds have no Sourcepeek backend.'));
-  } else if (info.ui === 'sveltekit' || info.ui === 'svelte') {
-    console.log(c.d(info.ui === 'sveltekit' ? '  src/routes/+layout.svelte:' : '  src/App.svelte:'));
-    box([`<script>`, `  import Sourcepeek from 'sourcepeek/svelte';`, `</script>`, ``, `<Sourcepeek />`]);
-  } else if (info.ui === 'vue') {
-    console.log(c.d('  src/App.vue:'));
-    box([`<script setup>`, `import Sourcepeek from 'sourcepeek/vue';`, `</script>`, ``, `<template>`, `  ...`, `  <Sourcepeek />`, `</template>`]);
-  } else {
-    console.log(c.d('  src/App.jsx / App.tsx:'));
-    box([`import Sourcepeek from 'sourcepeek/react';`, ``, `<>`, `  <App />`, `  <Sourcepeek />`, `</>`]);
+  });
+}
+
+function printUsage(info) {
+  console.log(`\n${c.b('Sourcepeek mounts itself')} ${c.d('— nothing to add to your layout or app code.')}`);
+  const left = leftoverMounts();
+  if (left.length) {
+    const what = info.kind === 'angular' ? 'provideSourcepeek()' : '<Sourcepeek />';
+    console.log(c.d(`  ${left.join(', ')} still ${left.length > 1 ? 'use' : 'uses'} ${what} from an earlier setup. It keeps working, but you can delete it.`));
   }
+  console.log(c.d(`  To render it yourself instead (e.g. only for some users), turn autoMount off: ${info.kind === 'next' ? 'withSourcepeek(nextConfig, { autoMount: false })' : info.kind === 'angular' ? `remove '${NG_AUTO}' from the polyfills in angular.json and add provideSourcepeek()` : 'sourcepeek({ autoMount: false })'}.`));
   if (info.kind !== 'angular') console.log(`\n${c.d('It runs on your dev server. Production builds stay off unless you set SOURCEPEEK_ENABLE_PROD=1 and a SOURCEPEEK_TOKEN (npx sourcepeek token).')}`);
-  else console.log('');
+  else console.log(`\n${c.d('It runs on ng serve only — production builds are not changed.')}`);
   console.log(`${c.d('Optional AI features: put OPENAI_API_KEY, ANTHROPIC_API_KEY or GEMINI_API_KEY in .env.local (or .env).')}`);
   console.log(`\nThen restart your dev server${info.kind === 'angular' ? ' (ng serve)' : ''} and click ${c.b('“Sourcepeek: OFF”')} in the bottom-right corner.`);
   console.log(`${c.d('Using Claude Code, Cursor or VS Code? Run')} ${c.b('npx sourcepeek mcp setup')} ${c.d('so your agent knows which element you clicked.')}\n`);
@@ -510,6 +629,7 @@ function setup() {
   else if (info.kind === 'cra') fail('Create React App is not supported (it is deprecated). Vite and Next.js are.');
   else fail('Could not detect Next.js, Vite or the Angular CLI in this project.');
 
+  if (done && info.kind === 'next') setupNextAutoMount();
   if (done && (info.kind === 'next' || process.argv.includes('--prod'))) done = setupProd(info);
   if (done) printUsage(info);
   else process.exitCode = 1;
@@ -519,8 +639,11 @@ function remove() {
   console.log(`\n🔥 ${c.b('Sourcepeek remove')}\n`);
   for (const f of [...NEXT_CONFIGS, ...VITE_CONFIGS]) removeFrom(path.join(cwd, f));
   removeProdRoute();
+  removeNextAutoMount();
   removeAngular();
-  console.log(c.d(fs.existsSync(path.join(cwd, 'angular.json')) ? '\nAlso delete provideSourcepeek() from your app providers, then: npm uninstall sourcepeek\n' : '\nAlso delete the <Sourcepeek /> import from your app, then: npm uninstall sourcepeek\n'));
+  const left = leftoverMounts();
+  if (left.length) console.log(c.d(`\nAlso delete the sourcepeek import from ${left.join(', ')}.`));
+  console.log(c.d('\nThen: npm uninstall sourcepeek\n'));
 }
 
 function doctor() {

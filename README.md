@@ -1,4 +1,4 @@
-# Sourcepeek 🔥
+# Sourcepeek
 
 Click any element in dev mode to see its source file, line, component chain, props, state and git history. Alt+click opens it in your editor. Describe a change in plain words and Sourcepeek previews it or writes it into your code, with a diff and undo.
 
@@ -11,93 +11,56 @@ npm i -D sourcepeek@latest
 npx sourcepeek setup
 ```
 
-Then render `<Sourcepeek />` once, anywhere in your app, and restart your dev server.
+Restart your dev server. That's it: Sourcepeek mounts itself, so there is nothing to add to your layout or app code.
 
-**Next.js — App Router** (`app/layout.tsx`, works in the Server Component layout)
+Click **“Sourcepeek: OFF”** in the bottom-right corner to turn inspect mode on, then click an element. `Esc` closes panels and exits inspect mode.
+
+### How it mounts
+
+| Project | How |
+| --- | --- |
+| Vite (React, Vue, Svelte) | `sourcepeek()` in `vite.config.*` adds a script to `index.html` |
+| SvelteKit | `sourcepeek()` in `vite.config.*` adds it to SvelteKit's client entry |
+| Next.js 15.3+ | `withSourcepeek()` in `next.config.*`, plus `instrumentation-client.ts` with `import 'sourcepeek/next/auto'` |
+| Next.js before 15.3 (webpack) | `withSourcepeek()` adds it to webpack's client entry |
+| Angular CLI | `sourcepeek/angular/auto` in the `polyfills` of the development build in `angular.json` |
+
+### Render it yourself instead
+
+To decide where and when Sourcepeek appears (for example only for some users in production), turn autoMount off:
+
+```js
+// vite.config.js
+plugins: [sourcepeek({ autoMount: false }), react()]
+
+// next.config.mjs
+export default withSourcepeek(nextConfig, { autoMount: false });
+```
+
+Then render the component once:
 
 ```tsx
-import Sourcepeek from 'sourcepeek/react';
-
-export default function RootLayout({ children }) {
-  return (
-    <html lang="en">
-      <body>
-        {children}
-        <Sourcepeek />
-      </body>
-    </html>
-  );
-}
+import Sourcepeek from 'sourcepeek/react';   // React, Next.js layout or _app
+<Sourcepeek />
 ```
-
-**Next.js — Pages Router** (`pages/_app.tsx`)
-
-```tsx
-import Sourcepeek from 'sourcepeek/react';
-
-export default function App({ Component, pageProps }) {
-  return (
-    <>
-      <Component {...pageProps} />
-      <Sourcepeek />
-    </>
-  );
-}
-```
-
-**React + Vite** (`src/App.jsx`)
-
-```jsx
-import Sourcepeek from 'sourcepeek/react';
-
-export default function App() {
-  return (
-    <>
-      {/* your app */}
-      <Sourcepeek />
-    </>
-  );
-}
-```
-
-**Vue 3** (`src/App.vue`)
 
 ```vue
 <script setup>
 import Sourcepeek from 'sourcepeek/vue';
 </script>
-
-<template>
-  <!-- your app -->
-  <Sourcepeek />
-</template>
+<template><Sourcepeek /></template>
 ```
-
-**Svelte / SvelteKit** (`src/App.svelte` or `src/routes/+layout.svelte`)
 
 ```svelte
 <script>
   import Sourcepeek from 'sourcepeek/svelte';
 </script>
-
-<slot />
 <Sourcepeek />
 ```
 
-**Angular** (`src/app/app.config.ts`, or the `providers` of your `AppModule`)
+Angular: remove `sourcepeek/angular/auto` from the polyfills in `angular.json` and add `provideSourcepeek()` (from `sourcepeek/angular`) to your app providers.
 
-```ts
-import { provideSourcepeek } from 'sourcepeek/angular';
-
-export const appConfig: ApplicationConfig = {
-  providers: [
-    provideSourcepeek(),
-    // …
-  ],
-};
-```
-
-Click **“Sourcepeek: OFF”** in the bottom-right corner to turn inspect mode on, then click an element. `Esc` closes panels and exits inspect mode.
+A `<Sourcepeek />` or `provideSourcepeek()` left over from an earlier setup keeps working next to autoMount, with one shared panel. You can delete it.
 
 ## Inspect panel
 
@@ -127,7 +90,7 @@ Supported editors: VS Code, Cursor, Windsurf, VS Code Insiders, Zed, WebStorm, I
 | **Renders & state** | Timeline of what changed on each render, and the current props and state. |
 | **Network** | Requests the component makes, from the code and live, with mocking. |
 | **Storage** | localStorage, sessionStorage and Cache Storage keys the component uses. |
-| **Accessibility** | Checks the element and its component, with file:line and **Fix with AI**. |
+| **Accessibility** | Checks the element and its component, with file:line and *Fix with AI*. |
 | **Web Vitals** | LCP, CLS and INP, pointed at the file and line that caused them. |
 | **Meta tags** | SEO basics for the page: title, description, h1, canonical, Open Graph. |
 | **Refactor** | AI refactoring suggestion for the component. |
@@ -263,19 +226,21 @@ Turn it off with `SOURCEPEEK_EDITS=0`.
 
 ## Angular
 
-`npx sourcepeek setup` points `ng serve` at `sourcepeek.proxy.mjs`, which starts the backend and keeps your existing proxy config. Add `provideSourcepeek()` to your providers and restart `ng serve`. **File** is the template, **Class** is the component class. Works on `ng serve` only.
+`npx sourcepeek setup` points `ng serve` at `sourcepeek.proxy.mjs`, which starts the backend and keeps your existing proxy config, and adds `sourcepeek/angular/auto` to the development build's polyfills, so Sourcepeek mounts itself. Restart `ng serve`. **File** is the template, **Class** is the component class. Works on `ng serve` only.
 
 ## What `npx sourcepeek setup` changes
+
+Only config files, never your components or layouts:
 
 | Project | Change |
 | --- | --- |
 | Vite (React, Vue, Svelte, SvelteKit) | adds `sourcepeek()` to `plugins` in `vite.config.*` |
-| Next.js | wraps the export of `next.config.*` in `withSourcepeek(...)` |
-| Angular CLI | sets `proxyConfig` in `angular.json` to `sourcepeek.proxy.mjs` |
+| Next.js | wraps the export of `next.config.*` in `withSourcepeek(...)`, creates the production API route, and on 15.3+ creates `instrumentation-client.*` (or adds one line to yours) |
+| Angular CLI | sets `proxyConfig` in `angular.json` to `sourcepeek.proxy.mjs`, and adds `sourcepeek/angular/auto` to the development `polyfills` |
 
 Safe to run more than once. Undo it with `npx sourcepeek remove`.
 
-### Manual setup
+## Manual setup
 
 ```js
 // vite.config.js
@@ -289,21 +254,32 @@ import { withSourcepeek } from 'sourcepeek/next';
 export default withSourcepeek(nextConfig);
 ```
 
+```js
+// instrumentation-client.ts (Next.js 15.3+, next to app/, or in src/)
+import 'sourcepeek/next/auto';
+```
+
+```jsonc
+// angular.json → projects.<app>.architect.build.configurations.development
+"polyfills": ["zone.js", "sourcepeek/angular/auto"]
+```
+
 ## How it works
 
 - **Tagging (dev only).** Elements get `data-mf-*` attributes with their file and line. Svelte and Angular need no tagging.
 - **Backend.** Served at `/__sourcepeek/*` by your dev server (on Next.js and Angular, a small localhost server behind a rewrite or proxy).
+- **Mounting.** The plugin in your config loads the panel (autoMount), so your app code stays untouched.
 - **UI.** A panel in Shadow DOM, so your app's CSS can't affect it.
 
 ## Production
 
 Off by default. To use Sourcepeek on a deployment:
 
-1. Set `SOURCEPEEK_ENABLE_PROD=1` (at build time and at runtime).
-2. Set `SOURCEPEEK_TOKEN` to a secret of 16+ characters (`npx sourcepeek token` makes one).
-3. Open the site with `?sourcepeek` and enter the token.
+1. Set **`SOURCEPEEK_ENABLE_PROD=1`** (at build time and at runtime).
+2. Set **`SOURCEPEEK_TOKEN`** to a secret of 16+ characters (`npx sourcepeek token` makes one).
+3. Open the site with **`?sourcepeek`** and enter the token.
 
-Until unlocked, the backend answers `401`. Next.js needs the API route that `npx sourcepeek setup` creates; commit it. *Apply to code* and MCP never run in production.
+Without `SOURCEPEEK_ENABLE_PROD`, nothing is added to the build. Until unlocked, the backend answers `401`. Next.js needs the API route that `npx sourcepeek setup` creates; commit it. *Apply to code* and MCP never run in production.
 
 | Variable | Purpose |
 | --- | --- |
@@ -337,14 +313,15 @@ Until unlocked, the backend answers `401`. Next.js needs the API route that `npx
 ## Troubleshooting
 
 - **No button appears.** Check the console. `backend not found at /__sourcepeek` means setup didn't run or the dev server wasn't restarted. `npx sourcepeek doctor` shows what was detected.
-- **`403 Forbidden: host … is not allowed`.** Add the host to `SOURCEPEEK_ALLOWED_HOSTS`. From another device, Docker or a tunnel, also set `SOURCEPEEK_ALLOW_REMOTE=1`.
+- **No button with React Router (framework mode), Astro or another Vite framework without `index.html`.** autoMount needs `index.html` (or SvelteKit). Render `<Sourcepeek />` yourself.
+- **No button on Next.js with Turbopack.** autoMount needs `instrumentation-client` with `import 'sourcepeek/next/auto'` (Next.js 15.3+): run `npx sourcepeek setup` again. Before 15.3, render `<Sourcepeek />` in your layout.
+- **403 Forbidden: host … is not allowed.** Add the host to `SOURCEPEEK_ALLOWED_HOSTS`. From another device, Docker or a tunnel, also set `SOURCEPEEK_ALLOW_REMOTE=1`.
 - **Sourcepeek is gone after deploying.** Production is opt-in: set `SOURCEPEEK_ENABLE_PROD=1` and `SOURCEPEEK_TOKEN`.
 - **The agent says nothing is selected.** Inspect an element with the dev server running, and start the agent in the project folder (or use `--root`).
 - **“Apply to code” is greyed out.** Hover it to see why.
 - **Data looks wrong.** A mock may still be active: check the bar at the bottom of the page.
 - **Angular: “Could not find the source of this element”.** The element is from a library, or `ng serve` runs a production configuration.
 - **Turbopack + JSX in `.js` files.** Under Turbopack, only `.jsx` and `.tsx` are tagged.
-
 
 ## License
 
